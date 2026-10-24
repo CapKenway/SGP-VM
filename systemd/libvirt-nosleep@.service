@@ -1,0 +1,11 @@
+[Unit]
+Description=Preventing sleep while libvirt domain "%i" is running
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/systemd-inhibit --what=sleep:shutdown:idle --why="Libvirt domain \"%i\" is active in Single GPU Passthrough" --who="libvirt-qemu" --mode=block sleep infinity
+
+[Install]
+WantedBy=multi-user.target

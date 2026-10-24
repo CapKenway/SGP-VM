@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# /usr/local/bin/vfio-teardown
+# Restores the host desktop environment and reattaches the GPU after VM shutdown.
+# Based on RisingPrism / VFIO community scripts with modern kernel enhancements.
+# ==============================================================================
+
+set -o pipefail
+
+LOG_DATE() {
+    date +"%Y-%m-%d %H:%M:%S :"
+}
+
+echo "$(LOG_DATE) [TEARDOWN] Beginning host reattachment process..."
+
+# ------------------------------------------------------------------------------
+# 1. Unload VFIO Drivers
+# ------------------------------------------------------------------------------
+echo "$(LOG_DATE) Unloading VFIO drivers..."
+modprobe -r vfio_pci 2>/dev/null || true
+modprobe -r vfio_iommu_type1 2>/dev/null || true
+modprobe -r vfio 2>/dev/null || true
+
+sleep 1
+
+# ------------------------------------------------------------------------------
+# 2. Reload Native GPU Drivers
+# ------------------------------------------------------------------------------
+if [ -f "/tmp/vfio-is-nvidia" ]; then
+    echo "$(LOG_DATE) Reloading NVIDIA drivers..."
+    modprobe i2c_nvidia_gpu 2>/dev/null || true
+    modprobe nvidia 2>/dev/null || true
+    modprobe nvidia_modeset 2>/dev/null || true
+    modprobe nvidia_drm 2>/dev/null || true
+    modprobe nvidia_uvm 2>/dev/null || true
+
+    if [ -f "/tmp/vfio-had-nvidia-persistenced" ]; then
+        systemctl start nvidia-persistenced.service 2>/dev/null || true
+        rm -f /tmp/vfio-had-nvidia-persistenced
+    fi
+    rm -f /tmp/vfio-is-nvidia
+    echo "$(LOG_DATE) NVIDIA drivers reloaded."
+fi
+
+if [ -f "/tmp/vfio-is-amd" ]; then
+    echo "$(LOG_DATE) Reloading AMD drivers..."
+    modprobe radeon 2>/dev/null || true
+    modprobe amdgpu 2>/dev/null || true
+    rm -f /tmp/vfio-is-amd
+    echo "$(LOG_DATE) AMD drivers reloaded."
+fi
+
+# Reload audio drivers
+modprobe snd_hda_intel 2>/dev/null || true
+
+sleep 1
+
+# ------------------------------------------------------------------------------
+# 3. Rebind VT Consoles
+# ------------------------------------------------------------------------------
+if [ -f "/tmp/vfio-bound-consoles" ]; then
+    while read -r console_idx; do
+        if [ -x "/sys/class/vtconsole/vtcon${console_idx}" ]; then
+            echo "$(LOG_DATE) Rebinding Console ${console_idx}"
+            echo 1 > "/sys/class/vtconsole/vtcon${console_idx}/bind" 2>/dev/null || true
+        fi
+    done < "/tmp/vfio-bound-consoles"
+    rm -f /tmp/vfio-bound-consoles
+fi
+
+# ------------------------------------------------------------------------------
+# 4. Restart Display Manager
+# ------------------------------------------------------------------------------
+if [ -f "/tmp/vfio-store-display-manager" ]; then
+    DISPMGR="$(cat /tmp/vfio-store-display-manager)"
+    if [[ -n "$DISPMGR" ]]; then
+        echo "$(LOG_DATE) Restarting Display Manager: $DISPMGR"
+        systemctl start "$DISPMGR.service" 2>/dev/null || true
+    fi
+    rm -f /tmp/vfio-store-display-manager
+else
+    # Fallback restart if file is absent
+    if systemctl is-enabled --quiet "display-manager.service" 2>/dev/null; then
+        systemctl start "display-manager.service" 2>/dev/null || true
+    fi
+fi
+
+echo "$(LOG_DATE) [TEARDOWN] Host reattachment completed successfully!"

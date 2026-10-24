@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# /usr/local/bin/vfio-startup
+# Isolates the single GPU from the host and loads VFIO drivers for the VM.
+# Based on RisingPrism / VFIO community scripts with modern kernel enhancements.
+# ==============================================================================
+
+set -o pipefail
+
+LOG_DATE() {
+    date +"%Y-%m-%d %H:%M:%S :"
+}
+
+echo "$(LOG_DATE) [STARTUP] Beginning Single GPU isolation process..."
+
+# ------------------------------------------------------------------------------
+# 1. Stop the active Display Manager
+# ------------------------------------------------------------------------------
+DISPMGR=""
+
+# Check KDE plasma specifically (often runs as display-manager.service)
+if pgrep -l "plasma" | grep -q "plasmashell"; then
+    echo "$(LOG_DATE) Detected KDE Plasma session."
+    if systemctl is-active --quiet "display-manager.service"; then
+        DISPMGR="display-manager"
+    elif systemctl is-active --quiet "sddm.service"; then
+        DISPMGR="sddm"
+    fi
+fi
+
+# Fallback: inspect display-manager.service symlink or common services
+if [[ -z "$DISPMGR" ]]; then
+    if [[ -x /run/systemd/system ]]; then
+        if systemctl is-active --quiet "gdm.service"; then
+            DISPMGR="gdm"
+        elif systemctl is-active --quiet "gdm3.service"; then
+            DISPMGR="gdm3"
+        elif systemctl is-active --quiet "sddm.service"; then
+            DISPMGR="sddm"
+        elif systemctl is-active --quiet "lightdm.service"; then
+            DISPMGR="lightdm"
+        elif systemctl is-active --quiet "ly.service"; then
+            DISPMGR="ly"
+        elif systemctl is-active --quiet "display-manager.service"; then
+            DISPMGR="display-manager"
+        fi
+    fi
+fi
+
+if [[ -n "$DISPMGR" ]]; then
+    echo "$DISPMGR" > /tmp/vfio-store-display-manager
+    echo "$(LOG_DATE) Stopping Display Manager: $DISPMGR"
+    systemctl stop "$DISPMGR.service" 2>/dev/null || true
+    
+    # Wait until display manager is completely stopped
+    timeout=10
+    while systemctl is-active --quiet "$DISPMGR.service" && [ $timeout -gt 0 ]; do
+        sleep 1
+        ((timeout--))
+    done
+else
+    echo "$(LOG_DATE) [WARNING] Could not identify running display manager."
+fi
+
+sleep 1
+
+# ------------------------------------------------------------------------------
+# 2. Unbind VT Consoles
+# ------------------------------------------------------------------------------
+rm -f /tmp/vfio-bound-consoles
+for (( i = 0; i < 16; i++ )); do
+    if [ -x "/sys/class/vtconsole/vtcon${i}" ]; then
+        if [ "$(grep -c "frame buffer" "/sys/class/vtconsole/vtcon${i}/name" 2>/dev/null || echo 0)" -ge 1 ]; then
+            echo "$(LOG_DATE) Unbinding Console ${i}"
+            echo 0 > "/sys/class/vtconsole/vtcon${i}/bind" 2>/dev/null || true
+            echo "$i" >> /tmp/vfio-bound-consoles
+        fi
+    fi
+done
+
+# ------------------------------------------------------------------------------
+# 3. Unbind Framebuffers (EFI framebuffer & SimpleDRM)
+# ------------------------------------------------------------------------------
+if [ -e /sys/bus/platform/drivers/efi-framebuffer/unbind ]; then
+    echo "$(LOG_DATE) Unbinding efi-framebuffer.0"
+    echo "efi-framebuffer.0" > /sys/bus/platform/drivers/efi-framebuffer/unbind 2>/dev/null || true
+fi
+
+if [ -e /sys/bus/platform/drivers/simple-framebuffer/unbind ]; then
+    echo "$(LOG_DATE) Unbinding simple-framebuffer.0"
+    echo "simple-framebuffer.0" > /sys/bus/platform/drivers/simple-framebuffer/unbind 2>/dev/null || true
+fi
+
+sleep 1
+
+# ------------------------------------------------------------------------------
+# 4. Unload GPU Drivers
+# ------------------------------------------------------------------------------
+rm -f /tmp/vfio-is-nvidia /tmp/vfio-is-amd
+
+# Check for NVIDIA
+if lspci -nn | grep -Ei "VGA|3D" | grep -iq "NVIDIA"; then
+    echo "$(LOG_DATE) Host has an NVIDIA GPU. Unloading NVIDIA modules..."
+    echo "true" > /tmp/vfio-is-nvidia
+
+    # Stop persistenced if active
+    if systemctl is-active --quiet "nvidia-persistenced.service"; then
+        systemctl stop "nvidia-persistenced.service" 2>/dev/null || true
+        echo "true" > /tmp/vfio-had-nvidia-persistenced
+    fi
+
+    # Unload in reverse dependency order
+    modprobe -r nvidia_uvm 2>/dev/null || true
+    modprobe -r nvidia_drm 2>/dev/null || true
+    modprobe -r nvidia_modeset 2>/dev/null || true
+    modprobe -r nvidia 2>/dev/null || true
+    modprobe -r i2c_nvidia_gpu 2>/dev/null || true
+
+    echo "$(LOG_DATE) NVIDIA drivers unloaded."
+fi
+
+# Check for AMD
+if lspci -nn | grep -Ei "VGA|3D" | grep -iq "AMD|Advanced Micro Devices|ATI"; then
+    echo "$(LOG_DATE) Host has an AMD GPU. Unloading AMD modules..."
+    echo "true" > /tmp/vfio-is-amd
+
+    modprobe -r amdgpu 2>/dev/null || true
+    modprobe -r radeon 2>/dev/null || true
+
+    echo "$(LOG_DATE) AMD drivers unloaded."
+fi
+
+# Unload GPU HDMI Audio if bound
+modprobe -r snd_hda_intel 2>/dev/null || true
+
+sleep 1
+
+# ------------------------------------------------------------------------------
+# 5. Load VFIO Drivers
+# ------------------------------------------------------------------------------
+echo "$(LOG_DATE) Loading VFIO drivers..."
+modprobe vfio
+modprobe vfio_pci
+modprobe vfio_iommu_type1
+
+echo "$(LOG_DATE) [STARTUP] GPU isolation completed successfully. Passing to QEMU/KVM!"

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# /etc/libvirt/hooks/qemu
+# Libvirt QEMU Hook Dispatcher for Single GPU Passthrough
+# ==============================================================================
+
+GUEST_NAME="$1"
+OPERATION="$2"
+SUB_OPERATION="$3"
+
+LOG_FILE="/var/log/libvirt/custom_hooks.log"
+mkdir -p /var/log/libvirt 2>/dev/null || true
+
+# Specify target VM name(s) to apply single GPU passthrough hooks.
+# Default is "win10". You can add more VM names separated by "|" e.g. "win10|win11|gaming-vm"
+TARGET_VMS="win10|win11"
+
+if [[ "$GUEST_NAME" =~ ^($TARGET_VMS)$ ]]; then
+    case "$OPERATION" in
+        "prepare")
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : [HOOK] Preparing host for VM '$GUEST_NAME' (sub: $SUB_OPERATION)" >> "$LOG_FILE"
+            systemctl start libvirt-nosleep@"$GUEST_NAME" 2>&1 | tee -a "$LOG_FILE"
+            /usr/local/bin/vfio-startup 2>&1 | tee -a "$LOG_FILE"
+            ;;
+
+        "release")
+            echo "$(date '+%Y-%m-%d %H:%M:%S') : [HOOK] Releasing host from VM '$GUEST_NAME' (sub: $SUB_OPERATION)" >> "$LOG_FILE"
+            systemctl stop libvirt-nosleep@"$GUEST_NAME" 2>&1 | tee -a "$LOG_FILE"
+            /usr/local/bin/vfio-teardown 2>&1 | tee -a "$LOG_FILE"
+            ;;
+    esac
+fi

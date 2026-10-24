@@ -1,0 +1,178 @@
+<!-- =========================================================================
+     configs/win10-ryzen5-5600.xml
+     Complete Libvirt Domain XML Template for Windows 10/11 Single GPU Passthrough
+     Tailored for AMD Ryzen 5 5600 (6 Cores / 12 Threads, Zen 3)
+     ========================================================================= -->
+<domain type="kvm">
+  <name>win10</name>
+  <uuid>a8b1c2d3-e4f5-6789-abcd-ef0123456789</uuid>
+  <metadata>
+    <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libosinfo/1.0">
+      <libosinfo:os id="http://microsoft.com/win/10"/>
+    </libosinfo:libosinfo>
+  </metadata>
+  <memory unit="KiB">16777216</memory>
+  <currentMemory unit="KiB">16777216</currentMemory>
+  <vcpu placement="static">12</vcpu>
+
+  <!-- CPU Configuration for AMD Ryzen 5 5600:
+       Option A (User Snippet): cores="12" threads="1" (Windows sees 12 physical cores)
+       Option B (Zen 3 Topology): cores="6" threads="2" (Windows sees 6 cores + SMT hyperthreading)
+       Option C (Recommended for Host Responsiveness): vcpu 10 with cores="5" threads="2" (leaves Core 0 for Linux)
+  -->
+  <cpu mode="host-passthrough" check="none" migratable="on">
+    <topology sockets="1" dies="1" clusters="1" cores="12" threads="1"/>
+    <cache mode="passthrough"/>
+    <feature policy="require" name="topoext"/>
+  </cpu>
+
+  <!-- OPTIONAL: CPU Pinning for Ryzen 5 5600 (Zen 3 single CCX: cores 0-5 with SMT threads 6-11)
+       Uncomment <cputune> to eliminate thread migration stutter:
+  <cputune>
+    <vcpupin vcpu="0" cpuset="0"/>
+    <vcpupin vcpu="1" cpuset="1"/>
+    <vcpupin vcpu="2" cpuset="2"/>
+    <vcpupin vcpu="3" cpuset="3"/>
+    <vcpupin vcpu="4" cpuset="4"/>
+    <vcpupin vcpu="5" cpuset="5"/>
+    <vcpupin vcpu="6" cpuset="6"/>
+    <vcpupin vcpu="7" cpuset="7"/>
+    <vcpupin vcpu="8" cpuset="8"/>
+    <vcpupin vcpu="9" cpuset="9"/>
+    <vcpupin vcpu="10" cpuset="10"/>
+    <vcpupin vcpu="11" cpuset="11"/>
+  </cputune>
+  -->
+
+  <os>
+    <type arch="x86_64" machine="pc-q35-latest">hvm</type>
+    <loader readonly="yes" type="pflash">/usr/share/edk2-ovmf/x64/OVMF_CODE.secboot.fd</loader>
+    <nvram>/var/lib/libvirt/qemu/nvram/win10_VARS.fd</nvram>
+    <boot dev="hd"/>
+  </os>
+
+  <!-- Features configuration including custom Hyper-V enlightenments -->
+  <features>
+    <acpi/>
+    <apic/>
+    <hyperv mode="custom">
+      <relaxed state="on"/>
+      <vapic state="on"/>
+      <spinlocks state="on"/>
+      <vpindex state="on"/>
+      <runtime state="on"/>
+      <synic state="on"/>
+      <stimer state="on"/>
+      <frequencies state="on"/>
+      <tlbflush state="off"/>
+      <ipi state="off"/>
+      <avic state="on"/>
+    </hyperv>
+    <kvm>
+      <hidden state="on"/>
+    </kvm>
+    <vmport state="off"/>
+    <ioapic driver="kvm"/>
+  </features>
+
+  <clock offset="localtime">
+    <timer name="rtc" tickpolicy="catchup"/>
+    <timer name="pit" tickpolicy="delay"/>
+    <timer name="hpet" present="yes"/>
+    <timer name="hypervclock" present="yes"/>
+  </clock>
+
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+
+  <pm>
+    <suspend-to-mem enabled="no"/>
+    <suspend-to-disk enabled="no"/>
+  </pm>
+
+  <devices>
+    <emulator>/usr/bin/qemu-system-x86_64</emulator>
+
+    <!-- VirtIO System Disk -->
+    <disk type="file" device="disk">
+      <driver name="qemu" type="qcow2" cache="none" io="native" discard="unmap"/>
+      <source file="/var/lib/libvirt/images/win10.qcow2"/>
+      <target dev="vda" bus="virtio"/>
+      <boot order="1"/>
+    </disk>
+
+    <!-- VirtIO Drivers ISO for Windows setup (remove after installation) -->
+    <!--
+    <disk type="file" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source file="/var/lib/libvirt/images/virtio-win.iso"/>
+      <target dev="sdb" bus="sata"/>
+      <readonly/>
+    </disk>
+    -->
+
+    <!-- PCIe Root Controller setup -->
+    <controller type="pci" index="0" model="pcie-root"/>
+    <controller type="pci" index="1" model="pcie-root-port"/>
+    <controller type="pci" index="2" model="pcie-root-port"/>
+    <controller type="pci" index="3" model="pcie-root-port"/>
+    <controller type="pci" index="4" model="pcie-root-port"/>
+    <controller type="pci" index="5" model="pcie-root-port"/>
+    <controller type="pci" index="6" model="pcie-root-port"/>
+    <controller type="pci" index="7" model="pcie-root-port"/>
+    <controller type="usb" index="0" model="qemu-xhci" ports="15"/>
+
+    <!-- High Performance VirtIO Network -->
+    <interface type="network">
+      <source network="default"/>
+      <model type="virtio"/>
+    </interface>
+
+    <!-- =====================================================================
+         PASSED-THROUGH GPU & AUDIO CONTROLLER
+         Replace the domain, bus, slot, and function numbers with your GPU PCI ID
+         from scripts/check-iommu.sh (e.g. 01:00.0 -> bus=0x01, slot=0x00, function=0x0).
+         ===================================================================== -->
+
+    <!-- GPU Video Component -->
+    <hostdev mode="subsystem" type="pci" managed="yes">
+      <source>
+        <address domain="0x0000" bus="0x01" slot="0x00" function="0x0"/>
+      </source>
+      <!-- ROM file: Required for NVIDIA; optional for AMD.
+           Default path: /usr/share/vgabios/patched.rom (or /var/lib/libvirt/vgabios/patched.rom on Fedora) -->
+      <rom file="/usr/share/vgabios/patched.rom"/>
+      <address type="pci" domain="0x0000" bus="0x01" slot="0x00" function="0x0" multifunction="on"/>
+    </hostdev>
+
+    <!-- GPU Audio Component -->
+    <hostdev mode="subsystem" type="pci" managed="yes">
+      <source>
+        <address domain="0x0000" bus="0x01" slot="0x00" function="0x1"/>
+      </source>
+      <address type="pci" domain="0x0000" bus="0x01" slot="0x00" function="0x1"/>
+    </hostdev>
+
+    <!-- NOTE: NOTICE THAT NO <graphics>, <video>, or Spice <audio> DEVICES ARE PRESENT.
+         In Single GPU Passthrough, all virtual displays must be removed! -->
+
+    <!-- =====================================================================
+         OPTIONAL: Evdev Keyboard & Mouse Passthrough (Low latency hotkey switching)
+         Switch focus between Host and Guest by pressing Left-Ctrl + Right-Ctrl.
+         Inspect devices in /dev/input/by-id/ and replace event paths below.
+         ===================================================================== -->
+    <!--
+    <input type="passthrough" bus="virtio">
+      <source evdev="/dev/input/by-id/usb-Your_Keyboard_Device-event-kbd"/>
+    </input>
+    <input type="passthrough" bus="virtio">
+      <source evdev="/dev/input/by-id/usb-Your_Mouse_Device-event-mouse"/>
+    </input>
+    -->
+
+    <!-- Sound via Ich9 or VirtIO Sound (Use Scream for low-latency network audio) -->
+    <sound model="ich9"/>
+
+  </devices>
+</domain>

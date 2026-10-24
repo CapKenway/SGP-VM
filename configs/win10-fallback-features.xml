@@ -1,0 +1,29 @@
+<!-- =========================================================================
+     configs/win10-fallback-features.xml
+     Use this <features> snippet if you experience BSOD, stuttering, or boot loops
+     with standard Hyper-V enlightenments on Windows with AMD Ryzen.
+     ========================================================================= -->
+
+  <features>
+    <acpi/>
+    <apic/>
+    <hyperv mode="custom">
+      <!-- Fallback settings: disabled relaxed, vapic, and spinlocks -->
+      <relaxed state="off"/>
+      <vapic state="off"/>
+      <spinlocks state="off"/>
+      <vpindex state="on"/>
+      <runtime state="on"/>
+      <synic state="on"/>
+      <stimer state="on"/>
+      <frequencies state="on"/>
+      <tlbflush state="off"/>
+      <ipi state="off"/>
+      <avic state="on"/>
+    </hyperv>
+    <kvm>
+      <hidden state="on"/>
+    </kvm>
+    <vmport state="off"/>
+    <ioapic driver="kvm"/>
+  </features>

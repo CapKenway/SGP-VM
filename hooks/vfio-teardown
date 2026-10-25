@@ -2,6 +2,7 @@
 # ==============================================================================
 # /usr/local/bin/vfio-teardown
 # Restores the host desktop environment and reattaches the GPU after VM shutdown.
+# Tailored for AMD Radeon RX 6700 XT (amdgpu) & NVIDIA cards.
 # Based on RisingPrism / VFIO community scripts with modern kernel enhancements.
 # ==============================================================================
 
@@ -26,6 +27,14 @@ sleep 1
 # ------------------------------------------------------------------------------
 # 2. Reload Native GPU Drivers
 # ------------------------------------------------------------------------------
+if [ -f "/tmp/vfio-is-amd" ]; then
+    echo "$(LOG_DATE) Reloading AMD drivers (amdgpu for RX 6700 XT)..."
+    modprobe drm_kms_helper 2>/dev/null || true
+    modprobe amdgpu 2>/dev/null || true
+    rm -f /tmp/vfio-is-amd
+    echo "$(LOG_DATE) AMD drivers reloaded."
+fi
+
 if [ -f "/tmp/vfio-is-nvidia" ]; then
     echo "$(LOG_DATE) Reloading NVIDIA drivers..."
     modprobe i2c_nvidia_gpu 2>/dev/null || true
@@ -42,15 +51,7 @@ if [ -f "/tmp/vfio-is-nvidia" ]; then
     echo "$(LOG_DATE) NVIDIA drivers reloaded."
 fi
 
-if [ -f "/tmp/vfio-is-amd" ]; then
-    echo "$(LOG_DATE) Reloading AMD drivers..."
-    modprobe radeon 2>/dev/null || true
-    modprobe amdgpu 2>/dev/null || true
-    rm -f /tmp/vfio-is-amd
-    echo "$(LOG_DATE) AMD drivers reloaded."
-fi
-
-# Reload audio drivers
+# Reload HDMI/DP audio driver
 modprobe snd_hda_intel 2>/dev/null || true
 
 sleep 1

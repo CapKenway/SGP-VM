@@ -2,6 +2,7 @@
 # ==============================================================================
 # /usr/local/bin/vfio-startup
 # Isolates the single GPU from the host and loads VFIO drivers for the VM.
+# Tailored for AMD Radeon RX 6700 XT (amdgpu) & NVIDIA cards.
 # Based on RisingPrism / VFIO community scripts with modern kernel enhancements.
 # ==============================================================================
 
@@ -28,7 +29,7 @@ if pgrep -l "plasma" | grep -q "plasmashell"; then
     fi
 fi
 
-# Fallback: inspect display-manager.service symlink or common services
+# Fallback: inspect display-manager.service or common services
 if [[ -z "$DISPMGR" ]]; then
     if [[ -x /run/systemd/system ]]; then
         if systemctl is-active --quiet "gdm.service"; then
@@ -64,6 +65,11 @@ fi
 
 sleep 1
 
+# Kill any remaining graphical processes holding DRI devices
+if command -v fuser >/dev/null 2>&1; then
+    fuser -k /dev/dri/* 2>/dev/null || true
+fi
+
 # ------------------------------------------------------------------------------
 # 2. Unbind VT Consoles
 # ------------------------------------------------------------------------------
@@ -98,6 +104,19 @@ sleep 1
 # ------------------------------------------------------------------------------
 rm -f /tmp/vfio-is-nvidia /tmp/vfio-is-amd
 
+# Check for AMD (e.g. Radeon RX 6700 XT)
+if lspci -nn | grep -Ei "VGA|3D" | grep -iq "AMD|Advanced Micro Devices|ATI"; then
+    echo "$(LOG_DATE) Host has an AMD GPU (e.g. RX 6700 XT). Unloading AMD modules..."
+    echo "true" > /tmp/vfio-is-amd
+
+    # Unload AMD GPU drivers
+    modprobe -r amdgpu 2>/dev/null || true
+    modprobe -r radeon 2>/dev/null || true
+    modprobe -r drm_kms_helper 2>/dev/null || true
+
+    echo "$(LOG_DATE) AMD drivers unloaded."
+fi
+
 # Check for NVIDIA
 if lspci -nn | grep -Ei "VGA|3D" | grep -iq "NVIDIA"; then
     echo "$(LOG_DATE) Host has an NVIDIA GPU. Unloading NVIDIA modules..."
@@ -119,18 +138,7 @@ if lspci -nn | grep -Ei "VGA|3D" | grep -iq "NVIDIA"; then
     echo "$(LOG_DATE) NVIDIA drivers unloaded."
 fi
 
-# Check for AMD
-if lspci -nn | grep -Ei "VGA|3D" | grep -iq "AMD|Advanced Micro Devices|ATI"; then
-    echo "$(LOG_DATE) Host has an AMD GPU. Unloading AMD modules..."
-    echo "true" > /tmp/vfio-is-amd
-
-    modprobe -r amdgpu 2>/dev/null || true
-    modprobe -r radeon 2>/dev/null || true
-
-    echo "$(LOG_DATE) AMD drivers unloaded."
-fi
-
-# Unload GPU HDMI Audio if bound
+# Unload GPU HDMI/DP Audio controller driver
 modprobe -r snd_hda_intel 2>/dev/null || true
 
 sleep 1

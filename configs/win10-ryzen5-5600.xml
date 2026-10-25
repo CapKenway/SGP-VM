@@ -1,7 +1,7 @@
 <!-- =========================================================================
      configs/win10-ryzen5-5600.xml
      Complete Libvirt Domain XML Template for Windows 10/11 Single GPU Passthrough
-     Tailored for AMD Ryzen 5 5600 (6 Cores / 12 Threads, Zen 3)
+     Tailored for AMD Ryzen 5 5600 (6 Cores / 12 Threads) & AMD Radeon RX 6700 XT
      ========================================================================= -->
 <domain type="kvm">
   <name>win10</name>
@@ -102,16 +102,6 @@
       <boot order="1"/>
     </disk>
 
-    <!-- VirtIO Drivers ISO for Windows setup (remove after installation) -->
-    <!--
-    <disk type="file" device="cdrom">
-      <driver name="qemu" type="raw"/>
-      <source file="/var/lib/libvirt/images/virtio-win.iso"/>
-      <target dev="sdb" bus="sata"/>
-      <readonly/>
-    </disk>
-    -->
-
     <!-- PCIe Root Controller setup -->
     <controller type="pci" index="0" model="pcie-root"/>
     <controller type="pci" index="1" model="pcie-root-port"/>
@@ -130,23 +120,28 @@
     </interface>
 
     <!-- =====================================================================
-         PASSED-THROUGH GPU & AUDIO CONTROLLER
-         Replace the domain, bus, slot, and function numbers with your GPU PCI ID
-         from scripts/check-iommu.sh (e.g. 01:00.0 -> bus=0x01, slot=0x00, function=0x0).
+         PASSED-THROUGH AMD RADEON RX 6700 XT & AUDIO CONTROLLER
+         Replace the domain, bus, slot, and function numbers with your RX 6700 XT PCI ID
+         from scripts/check-iommu.sh (typically 01:00.0 for Video and 01:00.1 for Audio).
+         
+         NOTE FOR AMD RX 6700 XT (RDNA 2):
+         Unlike NVIDIA cards, AMD RX 6700 XT cards usually do NOT need a <rom> line!
+         OVMF initializes the GPU directly. If your card experiences reset issues
+         without a ROM, you can uncomment <rom file='...'/> with an untouched VBIOS dump.
          ===================================================================== -->
 
-    <!-- GPU Video Component -->
+    <!-- RX 6700 XT Graphics (Navi 22 [1002:73df]) -->
     <hostdev mode="subsystem" type="pci" managed="yes">
       <source>
         <address domain="0x0000" bus="0x01" slot="0x00" function="0x0"/>
       </source>
-      <!-- ROM file: Required for NVIDIA; optional for AMD.
-           Default path: /usr/share/vgabios/patched.rom (or /var/lib/libvirt/vgabios/patched.rom on Fedora) -->
-      <rom file="/usr/share/vgabios/patched.rom"/>
+      <!-- Optional for AMD RX 6700 XT: uncomment only if needed:
+      <rom file="/usr/share/vgabios/rx6700xt.rom"/>
+      -->
       <address type="pci" domain="0x0000" bus="0x01" slot="0x00" function="0x0" multifunction="on"/>
     </hostdev>
 
-    <!-- GPU Audio Component -->
+    <!-- RX 6700 XT HDMI/DP Audio (Navi 21/22 Audio [1002:ab28]) -->
     <hostdev mode="subsystem" type="pci" managed="yes">
       <source>
         <address domain="0x0000" bus="0x01" slot="0x00" function="0x1"/>
@@ -154,8 +149,8 @@
       <address type="pci" domain="0x0000" bus="0x01" slot="0x00" function="0x1"/>
     </hostdev>
 
-    <!-- NOTE: NOTICE THAT NO <graphics>, <video>, or Spice <audio> DEVICES ARE PRESENT.
-         In Single GPU Passthrough, all virtual displays must be removed! -->
+    <!-- NOTE: ALL VIRTUAL DISPLAY DEVICES (Spice, QXL, Bochs) HAVE BEEN REMOVED.
+         The monitor receives physical signal directly from the RX 6700 XT ports. -->
 
     <!-- =====================================================================
          OPTIONAL: Evdev Keyboard & Mouse Passthrough (Low latency hotkey switching)

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # detect-bootloader.sh
-# Detects the active bootloader and instructs how to add kernel parameters
-# for Single GPU Passthrough (IOMMU, efifb:off, AVIC).
+# Detects the active bootloader (Limine, systemd-boot, kernelstub, rEFInd, GRUB)
+# and instructs how to add kernel parameters for Single GPU Passthrough:
+# (amd_iommu=on iommu=pt kvm_amd.avic=1 video=efifb:off)
 # ==============================================================================
 
 set -euo pipefail
@@ -22,7 +23,7 @@ cat /proc/cmdline
 echo ""
 
 # 2. Check IOMMU / AVIC flags in current cmdline
-echo -e "${BOLD}Checking recommended kernel parameters:${NC}"
+echo -e "${BOLD}Checking recommended kernel parameters for Ryzen 5 5600 + RX 6700 XT:${NC}"
 CMDLINE="$(cat /proc/cmdline)"
 
 check_param() {
@@ -43,32 +44,85 @@ echo ""
 echo -e "${BOLD}${BLUE}=== Detecting Installed Bootloader ===${NC}"
 
 BOOTLOADER="unknown"
+CONFIG_PATH=""
+
+# Detect Limine (multiple standard locations: EFI, /boot, /boot/limine, /efi)
+for p in \
+    /boot/limine.conf \
+    /boot/limine/limine.conf \
+    /boot/efi/limine.conf \
+    /boot/efi/limine/limine.conf \
+    /boot/efi/EFI/limine/limine.conf \
+    /efi/limine.conf \
+    /efi/limine/limine.conf \
+    /efi/EFI/limine/limine.conf \
+    /limine.conf \
+    /boot/limine.cfg; do
+    if [ -f "$p" ]; then
+        BOOTLOADER="limine"
+        CONFIG_PATH="$p"
+        break
+    fi
+done
+
+if [ "$BOOTLOADER" = "unknown" ] && command -v limine >/dev/null 2>&1; then
+    BOOTLOADER="limine"
+fi
 
 # Detect Pop!_OS kernelstub
-if command -v kernelstub >/dev/null 2>&1 && [ -f /etc/kernelstub/configuration ]; then
+if [ "$BOOTLOADER" = "unknown" ] && command -v kernelstub >/dev/null 2>&1 && [ -f /etc/kernelstub/configuration ]; then
     BOOTLOADER="kernelstub"
+    CONFIG_PATH="/etc/kernelstub/configuration"
+
 # Detect systemd-boot
-elif [ -d /boot/loader/entries ] || [ -d /efi/loader/entries ] || [ -d /boot/efi/loader/entries ] || command -v bootctl >/dev/null 2>&1; then
+elif [ "$BOOTLOADER" = "unknown" ] && ([ -d /boot/loader/entries ] || [ -d /efi/loader/entries ] || [ -d /boot/efi/loader/entries ] || command -v bootctl >/dev/null 2>&1); then
     if bootctl is-installed 2>/dev/null | grep -q "yes" || [ -d /boot/loader/entries ] || [ -d /efi/loader/entries ] || [ -d /boot/efi/loader/entries ]; then
         BOOTLOADER="systemd-boot"
     fi
+
 # Detect rEFInd
-elif [ -f /boot/refind_linux.conf ] || [ -d /boot/efi/EFI/refind ] || [ -d /boot/EFI/refind ] || [ -f /boot/efi/refind_linux.conf ]; then
-    BOOTLOADER="refind"
-# Detect Limine
-elif [ -f /boot/limine.conf ] || [ -f /boot/limine/limine.conf ] || [ -f /boot/efi/limine.conf ]; then
-    BOOTLOADER="limine"
+elif [ "$BOOTLOADER" = "unknown" ]; then
+    for r in /boot/refind_linux.conf /boot/efi/EFI/refind/refind.conf /boot/efi/refind_linux.conf /boot/EFI/refind/refind.conf; do
+        if [ -f "$r" ]; then
+            BOOTLOADER="refind"
+            CONFIG_PATH="$r"
+            break
+        fi
+    done
+
 # Detect GRUB (for reference)
-elif [ -f /etc/default/grub ]; then
+elif [ "$BOOTLOADER" = "unknown" ] && [ -f /etc/default/grub ]; then
     BOOTLOADER="grub"
+    CONFIG_PATH="/etc/default/grub"
 fi
 
-echo -e "Detected Bootloader: ${BOLD}${GREEN}${BOOTLOADER}${NC}\n"
+echo -e "Detected Bootloader: ${BOLD}${GREEN}${BOOTLOADER}${NC}"
+if [ -n "$CONFIG_PATH" ]; then
+    echo -e "Configuration File:  ${BOLD}${YELLOW}${CONFIG_PATH}${NC}"
+fi
+echo ""
 
 echo -e "${BOLD}${BLUE}=== Instructions to Add Kernel Parameters ===${NC}"
 RECOMMENDED_ARGS="amd_iommu=on iommu=pt kvm_amd.avic=1 video=efifb:off"
 
 case "$BOOTLOADER" in
+    "limine")
+        echo -e "${YELLOW}You are using the Limine bootloader:${NC}"
+        echo -e "Configuration file: ${BOLD}${CONFIG_PATH:-/boot/limine.conf or /boot/efi/limine.conf}${NC}"
+        echo -e "\n1. Open the file with your text editor (e.g. ${BOLD}sudo nano ${CONFIG_PATH:-/boot/limine.conf}${NC})"
+        echo -e "2. In your Linux boot entry, locate the ${BOLD}cmdline:${NC} (or ${BOLD}kernel_cmdline:${NC}) line."
+        echo -e "   Example:"
+        echo -e "   ------------------------------------------------------------"
+        echo -e "   /Linux"
+        echo -e "       protocol: linux"
+        echo -e "       kernel_path: boot():/vmlinuz-linux"
+        echo -e "       cmdline: root=UUID=xxxx-xxxx rw quiet ${BOLD}${RECOMMENDED_ARGS}${NC}"
+        echo -e "       module_path: boot():/initramfs-linux.img"
+        echo -e "   ------------------------------------------------------------"
+        echo -e "3. Save the file. ${BOLD}Limine does NOT require any update command!${NC}"
+        echo -e "   The changes take effect immediately on next reboot."
+        ;;
+
     "kernelstub")
         echo -e "${YELLOW}You are using kernelstub (standard on Pop!_OS with systemd-boot):${NC}"
         echo -e "Run the following command in terminal:"
@@ -92,17 +146,10 @@ case "$BOOTLOADER" in
 
     "refind")
         echo -e "${YELLOW}You are using rEFInd:${NC}"
-        echo -e "Edit ${BOLD}/boot/refind_linux.conf${NC} (or inside your EFI partition):"
+        echo -e "Edit ${BOLD}${CONFIG_PATH:-/boot/refind_linux.conf}${NC}:"
         echo -e "In the \"Boot with standard options\" line, append:"
         echo -e "  ${BOLD}${RECOMMENDED_ARGS}${NC}"
         echo -e "Save the file. No update command needed for rEFInd."
-        ;;
-
-    "limine")
-        echo -e "${YELLOW}You are using Limine:${NC}"
-        echo -e "Edit ${BOLD}/boot/limine.conf${NC} or ${BOLD}/boot/limine/limine.conf${NC}."
-        echo -e "Find your boot entry and append to ${BOLD}cmdline:${NC}:"
-        echo -e "  cmdline: ... ${BOLD}${RECOMMENDED_ARGS}${NC}"
         ;;
 
     "grub")
